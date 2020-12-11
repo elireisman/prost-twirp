@@ -1,9 +1,9 @@
 use futures::{Future, Stream};
 use futures::future;
+use hyper::header::{HeaderValue, CONTENT_LENGTH, CONTENT_TYPE};
 use hyper;
-use hyper::{Body, Client, Headers, HttpVersion, Method, Request, Response, StatusCode, Uri};
+use hyper::{Body, Client, HeaderMap, Version, Method, Request, Response, StatusCode, Uri};
 use hyper::client::HttpConnector;
-use hyper::header::{ContentLength, ContentType};
 use hyper::server::Service;
 use prost::{DecodeError, EncodeError, Message};
 use serde_json;
@@ -27,11 +27,11 @@ pub struct ServiceRequest<T> {
     /// The request method; should always be Post
     pub method: Method,
     /// The HTTP version, rarely changed from the default
-    pub version: HttpVersion,
+    pub version: Version,
     /// The set of headers
     ///
     /// Should always at least have `Content-Type`. Clients will override `Content-Length` on serialization.
-    pub headers: Headers,
+    pub headers: HeaderMap,
     // The serialized request object
     pub input: T,
 }
@@ -41,12 +41,12 @@ impl<T> ServiceRequest<T> {
     /// 
     /// This automatically sets the `Content-Type` header as `application/protobuf`.
     pub fn new(input: T) -> ServiceRequest<T> {
-        let mut headers = Headers::new();
-        headers.set(ContentType("application/protobuf".parse().unwrap()));
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/protobuf"));
         ServiceRequest {
             uri: Default::default(),
             method: Method::Post,
-            version: HttpVersion::default(),
+            version: Version::default(),
             headers: headers,
             input
         }
@@ -79,7 +79,7 @@ impl ServiceRequest<Vec<u8>> {
     pub fn to_hyper_raw(&self) -> Request {
         let mut req = Request::new(Method::Post, self.uri.clone());
         req.headers_mut().clone_from(&self.headers);
-        req.headers_mut().set(ContentLength(self.input.len() as u64));
+        req.headers_mut().insert(CONTENT_LENGTH, (self.input.len() as u64).to_string());
         req.set_body(self.input.clone());
         req
     }
@@ -127,11 +127,11 @@ impl<T: Message + Default + 'static> ServiceRequest<T> {
 #[derive(Debug)]
 pub struct ServiceResponse<T> {
     /// The HTTP version
-    pub version: HttpVersion,
+    pub version: Version,
     /// The set of headers
     ///
     /// Should always at least have `Content-Type`. Servers will override `Content-Length` on serialization.
-    pub headers: Headers,
+    pub headers: HeaderMap,
     /// The status code
     pub status: StatusCode,
     /// The serialized output object
@@ -143,10 +143,10 @@ impl<T> ServiceResponse<T> {
     /// 
     /// This automatically sets the `Content-Type` header as `application/protobuf`.
     pub fn new(output: T) -> ServiceResponse<T> { 
-        let mut headers = Headers::new();
-        headers.set(ContentType("application/protobuf".parse().unwrap()));
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/protobuf"));
         ServiceResponse {
-            version: HttpVersion::default(),
+            version: Version::default(),
             headers: headers,
             status: StatusCode::Ok,
             output
@@ -179,7 +179,7 @@ impl ServiceResponse<Vec<u8>> {
         Response::new().
             with_status(self.status).
             with_headers(self.headers.clone()).
-            with_header(ContentLength(self.output.len() as u64)).
+            with_header(CONTENT_LENGTH, (self.output.len() as u64).to_string()).
             with_body(self.output.clone())
     }
 
@@ -252,11 +252,11 @@ impl TwirpError {
     /// Create a byte-array service response for this error and the given status code
     pub fn to_resp_raw(&self) -> ServiceResponse<Vec<u8>> {
         let output = self.to_json_bytes().unwrap_or_else(|_| "{}".as_bytes().to_vec());
-        let mut headers = Headers::new();
-        headers.set(ContentType::json());
-        headers.set(ContentLength(output.len() as u64));
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(CONTENT_LENGTH, (output.len() as u64).to_string());
         ServiceResponse {
-            version: HttpVersion::default(),
+            version: Version::default(),
             headers: headers,
             status: self.status,
             output
@@ -268,9 +268,9 @@ impl TwirpError {
         let body = self.to_json_bytes().unwrap_or_else(|_| "{}".as_bytes().to_vec());
         Response::new().
             with_status(self.status).
-            with_header(ContentType::json()).
-            with_header(ContentLength(body.len() as u64)).
-            with_body(body)
+            header(CONTENT_TYPE, "application/json".parse().unwrap()).
+            header(CONTENT_LENGTH, (body.len() as u64).to_string()).
+            body(body)
     }
 
     /// Create error from Serde JSON value
@@ -329,9 +329,9 @@ pub enum ProstTwirpError {
         /// The request method, only present for server errors
         method: Option<Method>,
         /// The request or response's HTTP version
-        version: HttpVersion,
+        version: Version,
         /// The request or response's headers
-        headers: Headers,
+        headers: HeaderMap,
         /// The response status, only present for client errors
         status: Option<StatusCode>,
         /// The underlying error
@@ -417,7 +417,7 @@ impl<T: 'static + HyperService> Service for HyperServer<T> {
         if req.method() != &Method::Post {
             Box::new(future::ok(TwirpError::new(StatusCode::MethodNotAllowed, "bad_method",
                 "Method must be POST").to_hyper_resp()))
-        } else if req.headers().get::<ContentType>().map(|v| format!("{}", v) == "application/protobuf") != Some(true) {
+        } else if req.headers().get(CONTENT_TYPE).map(|v| format!("{}", v) == "application/protobuf") != Some(true) {
             Box::new(future::ok(TwirpError::new(StatusCode::UnsupportedMediaType,
                 "bad_content_type", "Content type must be application/protobuf").to_hyper_resp()))
         } else {
