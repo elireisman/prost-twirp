@@ -1,4 +1,4 @@
-use futures::{Future, Stream};
+use futures::future::Future;
 use futures::future;
 use hyper::header::{HeaderValue, CONTENT_LENGTH, CONTENT_TYPE};
 use hyper;
