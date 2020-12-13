@@ -46,7 +46,7 @@ impl<T> ServiceRequest<T> {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/protobuf"));
         ServiceRequest {
             uri: Default::default(),
-            method: Method::Post,
+            method: Method::POST,
             version: Version::default(),
             headers: headers,
             input
@@ -78,7 +78,7 @@ impl ServiceRequest<Vec<u8>> {
 
     /// Turn a byte-array service request into a hyper request
     pub fn to_hyper_raw(&self) -> Request<Vec<u8>> {
-        let mut req = Request::<Vec<u8>>::new(Method::Post, self.uri.clone());
+        let mut req = Request::<Vec<u8>>::new(Method::POST, self.uri.clone());
         req.headers_mut().clone_from(&self.headers);
         req.headers_mut().insert(CONTENT_LENGTH, self.input.len().to_string());
         req.set_body(self.input.clone());
@@ -418,7 +418,7 @@ impl<T: 'static + HyperService> Service<Request<T>> for HyperServer<T> {
     }
 
     fn call(&self, req: Request<T>) -> Self::Future {
-        if req.method() != &Method::Post {
+        if req.method() != &Method::POST {
             Box::new(future::ok(TwirpError::new(StatusCode::MethodNotAllowed, "bad_method",
                 "Method must be POST").to_hyper_resp()))
         } else if req.headers().get(CONTENT_TYPE).map(|v| format!("{}", v) == "application/protobuf") != Some(true) {
