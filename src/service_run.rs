@@ -1,21 +1,22 @@
 use futures::future::Future;
+use futures::task::{Context, Poll};
 use futures::future;
 use hyper::header::{HeaderValue, CONTENT_LENGTH, CONTENT_TYPE};
 use hyper;
 use hyper::{Body, Client, HeaderMap, Version, Method, Request, Response, StatusCode, Uri};
 use hyper::client::HttpConnector;
-use hyper::server::Service;
+use hyper::service::Service;
 use prost::{DecodeError, EncodeError, Message};
 use serde_json;
 use std::sync::Arc;
 
-pub type FutReq<T> = Box<dyn Future<Item=ServiceRequest<T>, Error=ProstTwirpError>>;
+pub type FutReq<T> = Box<dyn Future<Output = Result<ServiceRequest<T>, ProstTwirpError>>>;
 
 /// The type of every service request 
 pub type PTReq<I> = ServiceRequest<I>;
 
 /// The type of every service response
-pub type PTRes<O> = Box<dyn Future<Item=ServiceResponse<O>, Error=ProstTwirpError>>;
+pub type PTRes<O> = Box<dyn Future<Output= Result<ServiceResponse<O>, ProstTwirpError>>>;
 
 /// A request with HTTP info and the serialized input object
 #[derive(Debug)]
@@ -65,7 +66,7 @@ impl<T: Message + Default + 'static> From<T> for ServiceRequest<T> {
 
 impl ServiceRequest<Vec<u8>> {
     /// Turn a hyper request to a boxed future of a byte-array service request
-    pub fn from_hyper_raw(req: Request) -> FutReq<Vec<u8>> {
+    pub fn from_hyper_raw(req: Request<Vec<u8>>) -> FutReq<Vec<u8>> {
         let uri = req.uri().clone();
         let method = req.method().clone();
         let version = req.version();
@@ -76,8 +77,8 @@ impl ServiceRequest<Vec<u8>> {
     }
 
     /// Turn a byte-array service request into a hyper request
-    pub fn to_hyper_raw(&self) -> Request {
-        let mut req = Request::new(Method::Post, self.uri.clone());
+    pub fn to_hyper_raw(&self) -> Request<Vec<u8>> {
+        let mut req = Request::<Vec<u8>>::new(Method::Post, self.uri.clone());
         req.headers_mut().clone_from(&self.headers);
         req.headers_mut().insert(CONTENT_LENGTH, self.input.len().to_string());
         req.set_body(self.input.clone());
@@ -113,12 +114,12 @@ impl<T: Message + Default + 'static> ServiceRequest<T> {
     }
 
     /// Turn a hyper request into a protobuf service request
-    pub fn from_hyper_proto(req: Request) -> FutReq<T> {
+    pub fn from_hyper_proto(req: Request<T>) -> FutReq<T> {
         Box::new(ServiceRequest::from_hyper_raw(req).and_then(|v| v.to_proto()))
     }
 
     /// Turn a protobuf service request into a hyper request
-    pub fn to_hyper_proto(&self) -> Result<Request, ProstTwirpError> {
+    pub fn to_hyper_proto(&self) -> Result<Request<Vec<u8>>, ProstTwirpError> {
         self.to_proto_raw().map(|v| v.to_hyper_raw())
     }
 }
@@ -165,7 +166,7 @@ impl<T: Message + Default + 'static> From<T> for ServiceResponse<T> {
 
 impl ServiceResponse<Vec<u8>> {
     /// Turn a hyper response to a boxed future of a byte-array service response
-    pub fn from_hyper_raw(resp: Response) -> PTRes<Vec<u8>> {
+    pub fn from_hyper_raw(resp: Response<Vec<u8>>) -> PTRes<Vec<u8>> {
         let version = resp.version();
         let headers = resp.headers().clone();
         let status = resp.status();
@@ -175,8 +176,8 @@ impl ServiceResponse<Vec<u8>> {
     }
 
     /// Turn a byte-array service response into a hyper response
-    pub fn to_hyper_raw(&self) -> Response {
-        Response::new().
+    pub fn to_hyper_raw(&self) -> Response<Vec<u8>> {
+        Response::<Vec<u8>>::new().
             with_status(self.status).
             with_headers(self.headers.clone()).
             with_header(CONTENT_LENGTH, self.output.len().to_string()).
@@ -219,12 +220,12 @@ impl<T: Message + Default + 'static> ServiceResponse<T> {
     }
 
     /// Turn a hyper response into a protobuf service response
-    pub fn from_hyper_proto(resp: Response) -> PTRes<T> {
+    pub fn from_hyper_proto(resp: Response<T>) -> PTRes<T> {
         Box::new(ServiceResponse::from_hyper_raw(resp).and_then(|v| v.to_proto()))
     }
 
     /// Turn a protobuf service response into a hyper response
-    pub fn to_hyper_proto(&self) -> Result<Response, ProstTwirpError> {
+    pub fn to_hyper_proto(&self) -> Result<Response<Vec<u8>>, ProstTwirpError> {
         self.to_proto_raw().map(|v| v.to_hyper_raw())
     }
 }
@@ -264,11 +265,11 @@ impl TwirpError {
     }
 
     /// Create a hyper response for this error and the given status code
-    pub fn to_hyper_resp(&self) -> Response {
+    pub fn to_hyper_resp(&self) -> Response<Vec<u8>> {
         let body = self.to_json_bytes().unwrap_or_else(|_| "{}".as_bytes().to_vec());
-        Response::new().
+        Response::<Vec<u8>>::new().
             with_status(self.status).
-            header(CONTENT_TYPE, "application/json".parse().unwrap()).
+            header(CONTENT_TYPE, HeaderValue::from_static("application/json")).
             header(CONTENT_LENGTH, body.len().to_string()).
             body(body)
     }
@@ -407,13 +408,16 @@ impl<T: 'static + HyperService> HyperServer<T> {
     pub fn new(service: T) -> HyperServer<T> { HyperServer { service: Arc::new(service) } }
 }
 
-impl<T: 'static + HyperService> Service for HyperServer<T> {
-    type Request = Request;
-    type Response = Response;
+impl<T: 'static + HyperService> Service<Request<T>> for HyperServer<T> {
+    type Response = Response<T>;
     type Error = hyper::Error;
-    type Future = Box<dyn Future<Item = Self::Response, Error = Self::Error>>;
+    type Future = Box<dyn Future<Output = Result<Self::Response, Self::Error>>>;
 
-    fn call(&self, req: Request) -> Self::Future {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&self, req: Request<T>) -> Self::Future {
         if req.method() != &Method::Post {
             Box::new(future::ok(TwirpError::new(StatusCode::MethodNotAllowed, "bad_method",
                 "Method must be POST").to_hyper_resp()))
