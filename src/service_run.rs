@@ -66,7 +66,7 @@ impl<T: Message + Default + 'static> From<T> for ServiceRequest<T> {
 
 impl ServiceRequest<Vec<u8>> {
     /// Turn a hyper request to a boxed future of a byte-array service request
-    pub fn from_hyper_raw(req: Request<Vec<u8>>) -> FutReq<Vec<u8>> {
+    pub fn from_hyper_raw(req: Request<Body>) -> FutReq<Vec<u8>> {
         let uri = req.uri().clone();
         let method = req.method().clone();
         let version = req.version();
@@ -80,7 +80,7 @@ impl ServiceRequest<Vec<u8>> {
     pub fn to_hyper_raw(&self) -> Request<Vec<u8>> {
         let mut req = Request::<Vec<u8>>::new(Method::POST, self.uri.clone());
         req.headers_mut().clone_from(&self.headers);
-        req.headers_mut().insert(CONTENT_LENGTH, self.input.len().to_string());
+        req.headers_mut().insert(CONTENT_LENGTH, HeaderValue::from_str(&self.input.len().to_string()).unwrap());
         req.set_body(self.input.clone());
         req
     }
@@ -149,7 +149,7 @@ impl<T> ServiceResponse<T> {
         ServiceResponse {
             version: Version::default(),
             headers: headers,
-            status: StatusCode::Ok,
+            status: StatusCode::OK,
             output
         }
     }
@@ -180,7 +180,7 @@ impl ServiceResponse<Vec<u8>> {
         Response::<Vec<u8>>::new().
             with_status(self.status).
             with_headers(self.headers.clone()).
-            with_header(CONTENT_LENGTH, self.output.len().to_string()).
+            with_header(CONTENT_LENGTH, HeaderValue::from_str(&self.output.len().to_string()).unwrap()).
             with_body(self.output.clone())
     }
 
@@ -255,7 +255,7 @@ impl TwirpError {
         let output = self.to_json_bytes().unwrap_or_else(|_| "{}".as_bytes().to_vec());
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(CONTENT_LENGTH, output.len().to_string());
+        headers.insert(CONTENT_LENGTH, HeaderValue::from_str(&output.len().to_string()).unwrap());
         ServiceResponse {
             version: Version::default(),
             headers: headers,
@@ -270,7 +270,7 @@ impl TwirpError {
         Response::<Vec<u8>>::new().
             with_status(self.status).
             header(CONTENT_TYPE, HeaderValue::from_static("application/json")).
-            header(CONTENT_LENGTH, body.len().to_string()).
+            header(CONTENT_LENGTH, HeaderValue::from_str(&body.len().to_string()).unwrap()).
             body(body)
     }
 
@@ -419,10 +419,10 @@ impl<T: 'static + HyperService> Service<Request<T>> for HyperServer<T> {
 
     fn call(&self, req: Request<T>) -> Self::Future {
         if req.method() != &Method::POST {
-            Box::new(future::ok(TwirpError::new(StatusCode::MethodNotAllowed, "bad_method",
+            Box::new(future::ok(TwirpError::new(StatusCode::METHOD_NOT_ALLOWED, "bad_method",
                 "Method must be POST").to_hyper_resp()))
         } else if req.headers().get(CONTENT_TYPE).map(|v| format!("{}", v) == "application/protobuf") != Some(true) {
-            Box::new(future::ok(TwirpError::new(StatusCode::UnsupportedMediaType,
+            Box::new(future::ok(TwirpError::new(StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "bad_content_type", "Content type must be application/protobuf").to_hyper_resp()))
         } else {
             // Ug: https://github.com/tokio-rs/tokio-service/issues/9
@@ -432,7 +432,7 @@ impl<T: 'static + HyperService> Service<Request<T>> for HyperServer<T> {
                 map(|v| v.to_hyper_raw()).
                 or_else(|err| match err.root_err() {
                     ProstTwirpError::ProstDecodeError(_) =>
-                        Ok(TwirpError::new(StatusCode::BadRequest, "protobuf_decode_err", "Invalid protobuf body").
+                        Ok(TwirpError::new(StatusCode::BAD_REQUEST, "protobuf_decode_err", "Invalid protobuf body").
                             to_hyper_resp()),
                     ProstTwirpError::TwirpError(err) =>
                         Ok(err.to_hyper_resp()),
@@ -440,7 +440,7 @@ impl<T: 'static + HyperService> Service<Request<T>> for HyperServer<T> {
                     ProstTwirpError::HyperError(err) =>
                         Err(err),
                     _ =>
-                        Ok(TwirpError::new(StatusCode::InternalServerError, "internal_err", "Internal Error").
+                        Ok(TwirpError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_err", "Internal Error").
                             to_hyper_resp()),
                 }))
         }
