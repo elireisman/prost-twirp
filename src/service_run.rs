@@ -79,7 +79,7 @@ impl ServiceRequest<Vec<u8>> {
     pub fn to_hyper_raw(&self) -> Request {
         let mut req = Request::new(Method::Post, self.uri.clone());
         req.headers_mut().clone_from(&self.headers);
-        req.headers_mut().insert(CONTENT_LENGTH, (self.input.len() as u64).to_string());
+        req.headers_mut().insert(CONTENT_LENGTH, self.input.len().to_string());
         req.set_body(self.input.clone());
         req
     }
@@ -179,7 +179,7 @@ impl ServiceResponse<Vec<u8>> {
         Response::new().
             with_status(self.status).
             with_headers(self.headers.clone()).
-            with_header(CONTENT_LENGTH, (self.output.len() as u64).to_string()).
+            with_header(CONTENT_LENGTH, self.output.len().to_string()).
             with_body(self.output.clone())
     }
 
@@ -254,7 +254,7 @@ impl TwirpError {
         let output = self.to_json_bytes().unwrap_or_else(|_| "{}".as_bytes().to_vec());
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(CONTENT_LENGTH, (output.len() as u64).to_string());
+        headers.insert(CONTENT_LENGTH, output.len().to_string());
         ServiceResponse {
             version: Version::default(),
             headers: headers,
@@ -269,7 +269,7 @@ impl TwirpError {
         Response::new().
             with_status(self.status).
             header(CONTENT_TYPE, "application/json".parse().unwrap()).
-            header(CONTENT_LENGTH, (body.len() as u64).to_string()).
+            header(CONTENT_LENGTH, body.len().to_string()).
             body(body)
     }
 
